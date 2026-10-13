@@ -1,6 +1,11 @@
 on:
   workflow_dispatch:
     inputs:
+      use_windows_server_2022:
+        description: "Use the Windows Server 2022 runner image"
+        required: true
+        default: false
+        type: boolean
       duration_minutes:
         description: "Maximum duration of the temporary session"
         required: true
@@ -21,7 +26,7 @@ permissions:
 jobs:
   rdp:
     name: Start temporary Windows RDP session
-    runs-on: windows-latest
+    runs-on: ${{ inputs.use_windows_server_2022 && 'windows-2022' || 'windows-latest' }}
     timeout-minutes: 330
     env:
       RDP_USERNAME: ${{ secrets.RDP_USERNAME }}
