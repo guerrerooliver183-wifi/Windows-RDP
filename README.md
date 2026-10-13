@@ -1,4 +1,4 @@
-This repository contains a manual workflow that starts a `windows-latest` runner, connects that runner to your private Tailscale network, enables a temporary RDP account with local administrator privileges, and keeps the session available for a limited time. When the job finishes or is canceled, RDP is disabled and the temporary account is removed. The official Tailscale action also disconnects and removes the ephemeral node created for the workflow [1].
+This repository contains a manual workflow that starts a GitHub-hosted Windows runner (`windows-latest` by default, or `windows-2022` when the **Use the Windows Server 2022 runner image** option is enabled), connects it to your private Tailscale network, enables a temporary RDP account with local administrator privileges, and keeps the session available for a limited time. When the job finishes or is canceled, RDP is disabled and the temporary account is removed. The official Tailscale action also disconnects and removes the ephemeral node created for the workflow [1].
 
 > GitHub-hosted runners are ephemeral. Do not store important files on them or use this workflow as a permanent computer.
 
@@ -30,7 +30,7 @@ Install the [Tailscale](https://tailscale.com/download) application on the devic
 
 ## Run the session
 
-Open **Actions**, select **Windows RDP via Tailscale**, click **Run workflow**, leave the `main` branch selected, and choose a duration between 15 and 300 minutes. For the first test, select `15` or `30` minutes.
+Open **Actions**, select **Windows RDP via Tailscale**, click **Run workflow**, and choose a duration between 15 and 300 minutes. Leave **Use the Windows Server 2022 runner image** unchecked to keep the default `windows-latest` runner, or check it to select the `windows-2022` image. For the first test, select `15` or `30` minutes.
 
 When the **Keep RDP session available** step starts, its logs will show a `100.x.x.x` address. This is the runner's private Tailscale IPv4 address. On a client connected to the same tailnet, open Remote Desktop and connect to that address using port `3389`, for example:
 
