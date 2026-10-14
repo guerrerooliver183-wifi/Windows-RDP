@@ -44,8 +44,8 @@ If your tailnet uses custom ACLs or grants, make sure the client device is allow
 
 In the GitHub repository, open **Settings → Secrets and variables → Actions → Secrets → New repository secret**. Add these three secrets: [5]
 
-- `RDP_USER` — the local Windows username to create for the RDP session. It must be 1–20 characters and contain only letters, numbers, periods (`.`), hyphens (`-`), or underscores (`_`). This account is added to the Windows **Administrators** group so it can elevate without a UAC credential prompt during the session.
-- `RDP_PASSWORD` — the password for `RDP_USER`. It must be at least 8 characters, must not contain the username, and must include at least 3 of these 4 categories: uppercase letters, lowercase letters, numbers, and symbols.
+- `RDP_USERNAME` — the local Windows username to create for the RDP session. It must be 1–20 characters and contain only letters, numbers, periods (`.`), hyphens (`-`), or underscores (`_`). This account is added to the Windows **Administrators** group so it can elevate without a UAC credential prompt during the session.
+- `RDP_PASSWORD` — the password for `RDP_USERNAME`. It must be at least 8 characters, must not contain the username, and must include at least 3 of these 4 categories: uppercase letters, lowercase letters, numbers, and symbols.
 - `TAILSCALE_AUTHKEY` — the reusable Tailscale auth key generated in the previous section.
 
 Use a strong, unique `RDP_PASSWORD`. The account is an administrator on the temporary runner, and the workflow configures administrator elevation to proceed without a UAC prompt for that session. That means actions requiring elevation will not stop for a confirmation prompt. Never reuse this password for another account.
@@ -77,7 +77,7 @@ First confirm that Tailscale is connected on the client device and that it is lo
 1. Open **Remote Desktop Connection** (it is included with Windows). You can press **Start**, type `Remote Desktop Connection`, and open the app. [9]
 2. In **Computer**, enter the address printed by the workflow, including port `3389`, for example `100.88.12.34:3389`.
 3. Select **Connect**.
-4. Enter the username configured in `RDP_USER` and the corresponding `RDP_PASSWORD`.
+4. Enter the username configured in `RDP_USERNAME` and the corresponding `RDP_PASSWORD`.
 
 ### Android
 
@@ -85,7 +85,7 @@ First confirm that Tailscale is connected on the client device and that it is lo
 2. Install [Windows App from Google Play](https://play.google.com/store/apps/details?id=com.microsoft.rdc.androidx). Microsoft's listing currently specifies Android 11 or later. [8]
 3. Open Windows App and add a remote PC. Select the **+** or **Add** option, then enter the workflow's RDP address, including `:3389`, as the PC name. Microsoft's Windows App guide describes adding the remote PC by its IP address and then entering the account for that PC. [7]
 4. Select **Add & Connect** (or save the PC and tap its card).
-5. Enter the username configured in `RDP_USER` and its `RDP_PASSWORD`. Accept the certificate prompt if shown and if the address matches the current workflow run.
+5. Enter the username configured in `RDP_USERNAME` and its `RDP_PASSWORD`. Accept the certificate prompt if shown and if the address matches the current workflow run.
 
 The Tailscale IP belongs to that temporary runner. Use the current run's address; it will not be the same for a future run.
 

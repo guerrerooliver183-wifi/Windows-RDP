@@ -34,7 +34,7 @@ jobs:
     runs-on: ${{ inputs.use_windows_server_2022 && 'windows-2022' || 'windows-latest' }}
     timeout-minutes: 330
     env:
-      RDP_USERNAME: ${{ secrets.RDP_USER }}
+      RDP_USERNAME: ${{ secrets.RDP_USERNAME }}
       RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
 
@@ -142,7 +142,7 @@ jobs:
           )
 
           if ([string]::IsNullOrWhiteSpace($env:RDP_USERNAME)) {
-            $missing += 'RDP_USER secret'
+            $missing += 'RDP_USERNAME secret'
           }
 
           if ($missing.Count -gt 0) {
