@@ -1,0 +1,331 @@
+on:
+  workflow_dispatch:
+    inputs:
+      use_windows_server_2022:
+        description: "Use the Windows Server 2022 runner image"
+        required: true
+        default: false
+        type: boolean
+      duration_minutes:
+        description: "Maximum duration of the temporary session"
+        required: true
+        default: "60"
+        type: choice
+        options:
+          - "15"
+          - "30"
+          - "60"
+          - "120"
+          - "180"
+          - "240"
+          - "300"
+      install_mesa_opengl:
+        description: "Install Mesa3D software OpenGL driver system-wide (for RDP)"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  rdp:
+    name: Start temporary Windows RDP session
+    runs-on: ${{ inputs.use_windows_server_2022 && 'windows-2022' || 'windows-latest' }}
+    timeout-minutes: 330
+    env:
+      RDP_USERNAME: ${{ secrets.RDP_USER }}
+      RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+    steps:
+      - name: Report runner hardware
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host '=== Runner information ==='
+          Write-Host "Runner image label: ${{ inputs.use_windows_server_2022 && 'windows-2022' || 'windows-latest' }}"
+          Write-Host "Operating system: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+          Write-Host "Architecture: $env:RUNNER_ARCH"
+          Write-Host ''
+
+          Write-Host '=== Processor ==='
+          Get-CimInstance Win32_Processor |
+            Select-Object -First 1 |
+            ForEach-Object {
+              Write-Host "Model: $($_.Name.Trim())"
+              Write-Host "Cores: $($_.NumberOfCores)"
+              Write-Host "Logical processors: $($_.NumberOfLogicalProcessors)"
+            }
+
+          Write-Host ''
+          Write-Host '=== Memory (RAM) ==='
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $totalRamGiB = [math]::Round($computer.TotalPhysicalMemory / 1GB, 2)
+          Write-Host "Total physical RAM: $totalRamGiB GiB"
+
+          Write-Host ''
+          Write-Host '=== Storage volumes ==='
+          Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 3' |
+            Sort-Object DeviceID |
+            ForEach-Object {
+              $sizeGiB = [math]::Round($_.Size / 1GB, 2)
+              $freeGiB = [math]::Round($_.FreeSpace / 1GB, 2)
+              $usedGiB = [math]::Round(($_.Size - $_.FreeSpace) / 1GB, 2)
+              Write-Host "$($_.DeviceID) [$($_.FileSystem)]: total $sizeGiB GiB; used $usedGiB GiB; free $freeGiB GiB"
+            }
+
+          Write-Host ''
+          Write-Host 'Note: values are measured on this job runner and may vary by GitHub plan and image.'
+
+      - name: Install Mesa3D system-wide OpenGL driver
+        if: ${{ inputs.install_mesa_opengl }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $version = '26.2.4'
+          $fileName = "mesa3d-$version-release-msvc.7z"
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$version/$fileName"
+          $expectedSha256 = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
+          $archivePath = Join-Path $env:RUNNER_TEMP $fileName
+          $extractPath = Join-Path $env:RUNNER_TEMP 'mesa3d-systemwide'
+
+          Invoke-WebRequest -Uri $url -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "Mesa archive SHA-256 mismatch. Expected $expectedSha256; got $actualSha256."
+          }
+
+          $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+          if (-not (Test-Path $sevenZip)) {
+            throw '7-Zip was not found on this runner; cannot extract the Mesa release archive.'
+          }
+
+          New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
+          & $sevenZip x $archivePath "-o$extractPath" -y
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip failed to extract the Mesa archive with exit code $LASTEXITCODE."
+          }
+
+          $deployScript = Get-ChildItem -Path $extractPath -Filter 'systemwidedeploy.cmd' -Recurse -File |
+            Select-Object -First 1
+          if ($null -eq $deployScript) {
+            throw 'The Mesa release archive did not contain systemwidedeploy.cmd.'
+          }
+
+          Push-Location $deployScript.DirectoryName
+          try {
+            & $deployScript.FullName '1'
+            if ($LASTEXITCODE -ne 0) {
+              throw "Mesa system-wide deployment failed with exit code $LASTEXITCODE."
+            }
+          }
+          finally {
+            Pop-Location
+          }
+
+          Write-Host 'Mesa3D system-wide desktop OpenGL driver deployment completed.'
+          Write-Host 'This is CPU-based software rendering, not GPU acceleration.'
+
+      - name: Validate inputs and secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $required = @('RDP_PASSWORD', 'TAILSCALE_AUTHKEY')
+          $missing = @(
+            $required | Where-Object {
+              [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+            }
+          )
+
+          if ([string]::IsNullOrWhiteSpace($env:RDP_USERNAME)) {
+            $missing += 'RDP_USER secret'
+          }
+
+          if ($missing.Count -gt 0) {
+            throw "The following required values are missing: $($missing -join ', ')"
+          }
+
+          $username = $env:RDP_USERNAME.Trim()
+          if ($username -notmatch '^[A-Za-z0-9._-]{1,20}$') {
+            throw 'RDP_USERNAME must contain only letters, numbers, periods, hyphens, or underscores, and be no more than 20 characters long.'
+          }
+
+          $password = $env:RDP_PASSWORD
+          if ($password.Length -lt 8) {
+            throw 'RDP_PASSWORD must contain at least 8 characters.'
+          }
+
+          if ($password.ToLowerInvariant().Contains($username.ToLowerInvariant())) {
+            throw 'RDP_PASSWORD must not contain the username.'
+          }
+
+          $categories = 0
+          if ($password -cmatch '[A-Z]') { $categories++ }
+          if ($password -cmatch '[a-z]') { $categories++ }
+          if ($password -match '\d') { $categories++ }
+          if ($password -match '[^A-Za-z0-9]') { $categories++ }
+
+          if ($categories -lt 3) {
+            throw 'RDP_PASSWORD must include at least 3 of these 4 categories: uppercase letters, lowercase letters, numbers, and symbols.'
+          }
+
+          $duration = [int]('${{ inputs.duration_minutes }}')
+          if ($duration -lt 15 -or $duration -gt 300) {
+            throw 'The duration must be between 15 and 300 minutes.'
+          }
+
+          Write-Host "Requested duration: $duration minutes"
+          Write-Host 'Secret values will not be printed.'
+
+      - name: Connect runner to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          version: latest
+
+      - name: Get Tailscale address
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Start-Sleep -Seconds 5
+          $tailscaleIp = (tailscale ip -4 | Select-Object -First 1).Trim()
+
+          if ($tailscaleIp -notmatch '^100\.([0-9]{1,3}\.){2}[0-9]{1,3}$') {
+            throw "A valid Tailscale IPv4 address was not obtained: $tailscaleIp"
+          }
+
+          "TAILSCALE_IP=$tailscaleIp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Tailscale IPv4 address: $tailscaleIp"
+          Write-Host 'The client device must be connected to the same tailnet.'
+
+      - name: Enable Windows Remote Desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $username = $env:RDP_USERNAME.Trim()
+          $securePassword = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
+          $localUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+
+          if ($null -eq $localUser) {
+            New-LocalUser `
+              -Name $username `
+              -Password $securePassword `
+              -AccountNeverExpires `
+              -PasswordNeverExpires `
+              -Description 'Temporary GitHub Actions RDP user' | Out-Null
+          }
+          else {
+            Set-LocalUser -Name $username -Password $securePassword
+            Enable-LocalUser -Name $username
+          }
+
+          $groupName = 'Remote Desktop Users'
+          $existingMember = Get-LocalGroupMember -Group $groupName -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "$env:COMPUTERNAME\$username" -or $_.Name -eq $username }
+
+          if ($null -eq $existingMember) {
+            Add-LocalGroupMember -Group $groupName -Member $username
+          }
+
+          $adminGroupName = 'Administrators'
+          $adminMember = Get-LocalGroupMember -Group $adminGroupName -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "$env:COMPUTERNAME\$username" -or $_.Name -eq $username }
+
+          # The RDP user must be an administrator; otherwise UAC requires administrator credentials to elevate.
+          # This membership, together with ConsentPromptBehaviorAdmin=0 below, allows elevation without a credential prompt.
+          if ($null -eq $adminMember) {
+            Add-LocalGroupMember -Group $adminGroupName -Member $username
+          }
+
+          $uacPolicyPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          $uacPolicy = Get-ItemProperty -Path $uacPolicyPath
+          $uacPromptWasSet = $uacPolicy.PSObject.Properties.Name -contains 'ConsentPromptBehaviorAdmin'
+          "UAC_ADMIN_PROMPT_WAS_SET=$([int]$uacPromptWasSet)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($uacPromptWasSet) {
+            "UAC_ADMIN_PROMPT_ORIGINAL=$($uacPolicy.ConsentPromptBehaviorAdmin)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+          Set-ItemProperty -Path $uacPolicyPath -Name 'ConsentPromptBehaviorAdmin' -Type DWord -Value 0
+          Write-Host 'The temporary RDP account belongs to Administrators; administrator elevation prompts are disabled for this temporary runner session.'
+
+          Set-ItemProperty `
+            -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' `
+            -Name 'fDenyTSConnections' `
+            -Type DWord `
+            -Value 0
+
+          Set-Service -Name 'TermService' -StartupType Automatic
+          Start-Service -Name 'TermService'
+
+          Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue |
+            Enable-NetFirewallRule
+
+          $listener = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
+          if ($null -eq $listener) {
+            throw 'The RDP service is not listening on port 3389.'
+          }
+
+          Write-Host 'RDP is enabled and listening on local port 3389.'
+
+      - name: Keep RDP session available
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $duration = [int]('${{ inputs.duration_minutes }}')
+          $endTime = (Get-Date).AddMinutes($duration)
+
+          Write-Host 'RDP session available.'
+          Write-Host ''
+          Write-Host 'On a client connected to the same tailnet, open Remote Desktop and connect to:'
+          Write-Host "$($env:TAILSCALE_IP):3389"
+          Write-Host 'Use the value configured in RDP_USERNAME as the username and the corresponding password.'
+          Write-Host ''
+          Write-Host "The session will end automatically in approximately $duration minutes or when this workflow is canceled."
+
+          while ((Get-Date) -lt $endTime) {
+            $rdpListener = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
+            if ($null -eq $rdpListener) {
+              throw 'The RDP service is no longer listening on port 3389.'
+            }
+
+            $remaining = [math]::Max(0, [int](($endTime - (Get-Date)).TotalSeconds))
+            Start-Sleep -Seconds ([math]::Min(30, [math]::Max(1, $remaining)))
+          }
+
+      - name: Cleanup temporary RDP session
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          Set-ItemProperty `
+            -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' `
+            -Name 'fDenyTSConnections' `
+            -Type DWord `
+            -Value 1
+
+          Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue |
+            Disable-NetFirewallRule
+
+          $uacPolicyPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          if ($env:UAC_ADMIN_PROMPT_WAS_SET -eq '1') {
+            Set-ItemProperty -Path $uacPolicyPath -Name 'ConsentPromptBehaviorAdmin' -Type DWord -Value ([int]$env:UAC_ADMIN_PROMPT_ORIGINAL)
+          }
+          elseif ($env:UAC_ADMIN_PROMPT_WAS_SET -eq '0') {
+            Remove-ItemProperty -Path $uacPolicyPath -Name 'ConsentPromptBehaviorAdmin' -ErrorAction SilentlyContinue
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($env:RDP_USERNAME)) {
+            Remove-LocalGroupMember -Group 'Administrators' -Member $env:RDP_USERNAME -ErrorAction SilentlyContinue
+            Remove-LocalGroupMember -Group 'Remote Desktop Users' -Member $env:RDP_USERNAME -ErrorAction SilentlyContinue
+            Remove-LocalUser -Name $env:RDP_USERNAME -ErrorAction SilentlyContinue
+          }
+
+          Write-Host 'RDP was disabled, and the temporary account and its privileges were removed.'
